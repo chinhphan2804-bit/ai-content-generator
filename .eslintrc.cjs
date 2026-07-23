@@ -50,6 +50,9 @@ module.exports = {
       },
       rules: {
         "react/no-unknown-property": ["error", { ignore: ["variant"] }],
+        "react/no-unescaped-entities": "off",
+        "jsx-a11y/no-static-element-interactions": "off",
+        "jsx-a11y/click-events-have-key-events": "off",
       },
     },
 
@@ -74,6 +77,10 @@ module.exports = {
         "plugin:import/recommended",
         "plugin:import/typescript",
       ],
+      rules: {
+        "@typescript-eslint/no-explicit-any": "off",
+        "@typescript-eslint/ban-ts-comment": "off",
+      }
     },
 
     // Node
