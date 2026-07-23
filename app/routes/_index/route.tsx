@@ -1,6 +1,6 @@
-import type { LoaderFunctionArgs } from "@remix-run/node";
-import { redirect } from "@remix-run/node";
-import { Form, useLoaderData } from "@remix-run/react";
+import type { LoaderFunctionArgs } from "react-router";
+import { redirect } from "react-router";
+import { Form, useLoaderData } from "react-router";
 
 import { login } from "../../shopify.server";
 
@@ -22,9 +22,9 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <h1 className={styles.heading}>AI Content Generator</h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          Instantly create SEO-optimized product titles, descriptions, and bullet points — powered by Claude AI and real competitor analysis.
         </p>
         {showForm && (
           <Form className={styles.form} method="post" action="/auth/login">
@@ -40,16 +40,13 @@ export default function App() {
         )}
         <ul className={styles.list}>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Competitor analysis.</strong> Finds the #1 Google result for your product and shows their content side-by-side.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>AI-generated content.</strong> Claude AI writes better SEO titles, meta descriptions, and product copy — benefit-first, conversion-focused.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>One-click save.</strong> Push the final content directly to your Shopify product. No copy-pasting.
           </li>
         </ul>
       </div>

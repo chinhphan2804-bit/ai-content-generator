@@ -14,21 +14,29 @@ datasource db {
 }
 
 model Session {
-  id                  String    @id
-  shop                String
-  state               String
-  isOnline            Boolean   @default(false)
-  scope               String?
-  expires             DateTime?
-  accessToken         String
-  userId              BigInt?
-  firstName           String?
-  lastName            String?
-  email               String?
-  accountOwner        Boolean   @default(false)
-  locale              String?
-  collaborator        Boolean?  @default(false)
-  emailVerified       Boolean?  @default(false)
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
+}
+
+// Đếm số lượt "Generate AI Content" đã dùng của mỗi shop, để áp giới hạn
+// gói miễn phí (paywall) khi shop chưa có subscription đang active.
+model ShopUsage {
+  shop          String   @id
+  generateCount Int      @default(0)
+  updatedAt     DateTime @updatedAt
 }

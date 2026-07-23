@@ -1,0 +1,10 @@
+import type { ActionFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+
+// GDPR: merchant requests customer data stored by this app.
+// This app only modifies product descriptions — no customer data is stored.
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { topic, shop } = await authenticate.webhook(request);
+  console.log(`[GDPR] ${topic} for ${shop} — no customer data stored`);
+  return new Response(null, { status: 200 });
+};
