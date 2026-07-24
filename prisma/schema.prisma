@@ -9,8 +9,12 @@ generator client {
 // enough when changing adapters.
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider  = "postgresql"
+  // DATABASE_URL: connection pooling URI (port 6543, pgbouncer) — dùng lúc app chạy.
+  // DIRECT_URL: direct connection (port 5432) — chỉ Prisma Migrate dùng, pgbouncer
+  // không hỗ trợ prepared statements nên migrate phải đi thẳng, không qua pooler.
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model Session {
