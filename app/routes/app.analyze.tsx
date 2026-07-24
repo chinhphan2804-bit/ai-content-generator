@@ -1,4 +1,3 @@
-/* eslint-disable */
 import { useState, useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
@@ -16,13 +15,9 @@ const FREE_GENERATE_LIMIT = 5;
 type Product = { id: string; title: string; price: string; currency: string };
 type Message = { role: "user" | "assistant"; content: string };
 
-function wordCount(text: string) {
-  return text.trim().split(/\s+/).filter(Boolean).length;
-}
-
 function renderBold(text: string) {
   // Tự động in đậm: **text** và số tiền ($9.99, USD 9.99, 9.99 USD, v.v.)
-  const pattern = /(\*\*.+?\*\*|(?:USD|EUR|GBP|VND|AUD|CAD)\s*[\d,]+(?:\.\d+)?|[\$€£₫]\s*[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s*(?:USD|EUR|GBP|VND|AUD|CAD))/g;
+  const pattern = /(\*\*.+?\*\*|(?:USD|EUR|GBP|VND|AUD|CAD)\s*[\d,]+(?:\.\d+)?|[$€£₫]\s*[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s*(?:USD|EUR|GBP|VND|AUD|CAD))/g;
   const parts = text.split(pattern);
   return parts.map((part, i) => {
     if (part.startsWith("**") && part.endsWith("**")) {
@@ -33,16 +28,6 @@ function renderBold(text: string) {
     }
     return part;
   });
-}
-
-function parseAiContent(raw: string) {
-  const clean = raw.replace(/#+/g, "").replace(/---+/g, "");
-  const seoTitle = clean.match(/SEO TITLE:\s*\n?([\s\S]*?)(?=\n\s*META DESCRIPTION:|$)/i)?.[1]?.trim() || "";
-  const metaDesc = clean.match(/META DESCRIPTION:\s*\n?([\s\S]*?)(?=\n\s*PRODUCT DESCRIPTION:|$)/i)?.[1]?.trim() || "";
-  const productDesc = clean.match(/PRODUCT DESCRIPTION:\s*\n?([\s\S]*?)(?=\n\s*BULLET POINTS:|$)/i)?.[1]?.trim() || "";
-  const bulletSection = clean.match(/BULLET POINTS:\s*\n?([\s\S]*?)$/i)?.[1]?.trim() || "";
-  const bullets = bulletSection.split("\n").map(l => l.replace(/^[-•]\s*/, "").trim()).filter(Boolean).slice(0, 3);
-  return { seoTitle, metaDesc, productDesc, bullets };
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -69,8 +54,8 @@ async function searchCompetitor(productName: string): Promise<{ title: string; l
   const ecommerce = organic.find(r =>
     !BLOCKED_DOMAINS.some(d => r.link.includes(d)) &&
     (r.link.includes("amazon.") || r.link.includes("etsy.") || r.link.includes("shopify") ||
-     r.link.includes("/product") || r.link.includes("/shop") || r.link.includes("/store") ||
-     r.link.includes("/p/") || r.link.includes("/item"))
+      r.link.includes("/product") || r.link.includes("/shop") || r.link.includes("/store") ||
+      r.link.includes("/p/") || r.link.includes("/item"))
   ) || organic.find(r => !BLOCKED_DOMAINS.some(d => r.link.includes(d)));
   return ecommerce || null;
 }
@@ -326,11 +311,11 @@ ${langInstruction}`
 
     const translatePromise = language === "vi" && (competitorTitle || competitorMetaDesc || competitorBodyText)
       ? client.messages.create({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 1000,
-          messages: [{
-            role: "user",
-            content: `Dịch nội dung e-commerce sau sang tiếng Việt, giữ nguyên giọng marketing tự nhiên:
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1000,
+        messages: [{
+          role: "user",
+          content: `Dịch nội dung e-commerce sau sang tiếng Việt, giữ nguyên giọng marketing tự nhiên:
 
 TITLE: ${competitorTitle}
 META: ${competitorMetaDesc}
@@ -340,8 +325,8 @@ Trả về đúng định dạng:
 TITLE_VN: [bản dịch]
 META_VN: [bản dịch]
 DESCRIPTION_VN: [bản dịch]`
-          }]
-        })
+        }]
+      })
       : Promise.resolve(null);
 
     const [aiResponse, translateResponse] = await Promise.all([generatePromise, translatePromise]);
@@ -562,7 +547,7 @@ function applyAiContentText(
 }
 
 export default function Analyze() {
-  const { shop } = useLoaderData<typeof loader>();
+  useLoaderData<typeof loader>();
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProductId, setSelectedProductId] = useState("");
   const selectedProduct = products.find(p => p.id === selectedProductId) || null;
@@ -607,24 +592,24 @@ export default function Analyze() {
       try {
         // Wait for App Bridge to load and patch the global fetch
         let retries = 0;
-        // @ts-ignore
+        // @ts-expect-error -- window.shopify is injected by Shopify App Bridge at runtime, not typed
         while (!window.shopify && retries < 50) {
           await new Promise(r => setTimeout(r, 100));
           retries++;
         }
-        
-        // @ts-ignore
+
+        // @ts-expect-error -- window.shopify is injected by Shopify App Bridge at runtime, not typed
         if (!window.shopify) {
           throw new Error("Shopify App Bridge failed to load (window.shopify is undefined). Please check your internet connection or ad blocker.");
         }
 
-        // @ts-ignore
+        // @ts-expect-error -- window.shopify is injected by Shopify App Bridge at runtime, not typed
         if (window.shopify && window.shopify.ready) {
-          // @ts-ignore
+          // @ts-expect-error -- window.shopify is injected by Shopify App Bridge at runtime, not typed
           await window.shopify.ready;
         }
 
-        // @ts-ignore
+        // @ts-expect-error -- window.shopify is injected by Shopify App Bridge at runtime, not typed
         const token = await window.shopify?.idToken();
 
         const res = await fetch("/api/products", {
@@ -645,7 +630,7 @@ export default function Analyze() {
           })) || [];
           setProducts(mapped);
           if (mapped.length === 0) {
-             setFetchError("Store has 0 products.");
+            setFetchError("Store has 0 products.");
           }
         }
       } catch (err: any) {
@@ -724,9 +709,9 @@ export default function Analyze() {
   // Handle save completion
   useEffect(() => {
     if (saveFetcher.state === "idle" && saveFetcher.data?.saveSuccess) {
-      // @ts-ignore
+      // @ts-expect-error -- window.shopify is injected by Shopify App Bridge at runtime, not typed
       if (window.shopify && window.shopify.toast) {
-        // @ts-ignore
+        // @ts-expect-error -- window.shopify is injected by Shopify App Bridge at runtime, not typed
         window.shopify.toast.show("Content saved to Shopify successfully!");
       }
     }
@@ -827,7 +812,7 @@ export default function Analyze() {
           <s-text-field
             label=""
             value={value}
-            // @ts-ignore
+            // @ts-expect-error -- multiline is a valid s-text-field attribute missing from its TS types
             multiline={multiline}
             onInput={(e: any) => setValue(e.target.value)}
           />
@@ -903,7 +888,7 @@ export default function Analyze() {
           {fetcher.data?.paywall && (
             <s-banner tone="warning" heading="Free plan limit reached">
               <p>
-                You've used all {fetcher.data.limit} free AI generations. Upgrade to the Pro plan for
+                You&apos;ve used all {fetcher.data.limit} free AI generations. Upgrade to the Pro plan for
                 unlimited content generation.
               </p>
               <div style={{ marginTop: "8px" }}>
@@ -918,7 +903,7 @@ export default function Analyze() {
               <s-section>
                 <h2 style={{ fontSize: "18px", fontWeight: "bold", marginBottom: "8px" }}>💬 Chat with AI to refine content</h2>
                 <p style={{ fontSize: "13px", color: "#666", marginBottom: "12px" }}>
-                  Tell the AI how to adjust the content. e.g. "Add free shipping", "Shorten the title", "Make it more friendly"
+                  Tell the AI how to adjust the content. e.g. &quot;Add free shipping&quot;, &quot;Shorten the title&quot;, &quot;Make it more friendly&quot;
                 </p>
 
                 {messages.some(m => m.role === "user") && (
@@ -946,6 +931,7 @@ export default function Analyze() {
                 )}
 
                 <div style={{ display: "flex", gap: "12px", alignItems: "flex-end" }}>
+                  {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- layout wrapper only forwards Enter keydown from the text field inside, not itself interactive */}
                   <div
                     style={{ flex: 1 }}
                     onKeyDown={(e: any) => {
@@ -981,7 +967,7 @@ export default function Analyze() {
                       <s-spinner size="base"></s-spinner>
                     ) : competitorNotFound ? (
                       <s-banner tone="warning" heading="No competitor found">
-                        <p>Couldn't find a similar product page on Google. You can still generate AI content based on the product name.</p>
+                        <p>Couldn&apos;t find a similar product page on Google. You can still generate AI content based on the product name.</p>
                       </s-banner>
                     ) : (
                       <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
@@ -995,7 +981,7 @@ export default function Analyze() {
                         </a>
                         {cachedCompetitor!.fetchBlocked && (
                           <s-banner tone="warning" heading="Couldn't load this page directly">
-                            <p>This site blocks automated requests, so we couldn't read its actual content. SEO Title and Meta Description below are a fallback from Google's search result summary — they may not exactly match the live page.</p>
+                            <p>This site blocks automated requests, so we couldn&apos;t read its actual content. SEO Title and Meta Description below are a fallback from Google&apos;s search result summary — they may not exactly match the live page.</p>
                           </s-banner>
                         )}
                         <s-divider></s-divider>
@@ -1059,7 +1045,7 @@ export default function Analyze() {
                       <s-spinner></s-spinner>
                     ) : !editedTitle && !editedMetaDesc && !editedProductDesc ? (
                       <s-banner tone="info" heading="No content yet">
-                        <p>Click "Generate AI Content" above to create SEO content for this product.</p>
+                        <p>Click &quot;Generate AI Content&quot; above to create SEO content for this product.</p>
                       </s-banner>
                     ) : (
                       <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>

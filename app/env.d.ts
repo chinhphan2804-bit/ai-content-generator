@@ -1,4 +1,4 @@
-/* eslint-disable */
+
 /// <reference types="@react-router/dev" />
 /// <reference types="vite/client" />
 
@@ -23,4 +23,4 @@ declare global {
   }
 }
 
-export {};
+export { };

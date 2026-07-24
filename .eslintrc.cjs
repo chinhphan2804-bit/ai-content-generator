@@ -89,6 +89,20 @@ module.exports = {
         node: true,
       },
     },
+
+    // AI Content Generator feature — external API responses (Serper, Shopify
+    // GraphQL, Anthropic) aren't typed yet, so `any` is allowed here for now.
+    {
+      files: [
+        "app/db.server.ts",
+        "app/env.d.ts",
+        "app/routes/app.analyze.tsx",
+        "app/routes/app.subscribe.tsx",
+      ],
+      rules: {
+        "@typescript-eslint/no-explicit-any": "off",
+      },
+    },
   ],
   globals: {
     shopify: "readonly"
