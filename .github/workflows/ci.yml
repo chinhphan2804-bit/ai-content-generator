@@ -1,9 +1,9 @@
-name: Deploy Shopify app
+name: CI
 on:
-  push:
+  pull_request:
     branches: [main]
 jobs:
-  deploy:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,6 +13,3 @@ jobs:
       - run: npm run lint && npm run typecheck
       - run: npm test
       - run: npm run build
-      - run: npx @shopify/cli@^4 app deploy --allow-updates
-        env:
-          SHOPIFY_APP_AUTOMATION_TOKEN: ${{ secrets.SHOPIFY_APP_AUTOMATION_TOKEN }}
