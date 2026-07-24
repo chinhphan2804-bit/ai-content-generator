@@ -12,6 +12,6 @@ jobs:
       - run: npm ci
       - run: npm run lint && npm run typecheck
       - run: npm run build
-      - run: npx @shopify/cli@^4 app deploy
+      - run: npx @shopify/cli@^4 app deploy --force --allow-updates
         env:
           SHOPIFY_APP_AUTOMATION_TOKEN: ${{ secrets.SHOPIFY_APP_AUTOMATION_TOKEN }}
