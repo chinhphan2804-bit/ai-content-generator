@@ -17,6 +17,11 @@ const FREE_GENERATE_LIMIT = 5;
 // chỉ để chặn bug/spam gọi lặp vô hạn, dư sức cho merchant dùng bình thường.
 const DAILY_SAFETY_LIMIT = 100;
 
+// Trần lượt Generate/tháng cho shop ĐÃ trả phí — gói Monthly Subscription chỉ
+// $19,99, cần giới hạn kinh doanh riêng (khác safety-net ở trên) để chi phí
+// AI mỗi shop không vượt quá doanh thu gói mang lại.
+const MONTHLY_PAID_LIMIT = 150;
+
 type Product = { id: string; title: string; price: string; currency: string };
 type Message = { role: "user" | "assistant"; content: string };
 
@@ -547,6 +552,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       create: { shop: session.shop },
     });
     const dailyCountSoFar = usage.dailyCountDate === today ? usage.dailyCount : 0;
+    const thisMonth = today.slice(0, 7); // UTC YYYY-MM
+    const monthlyCountSoFar = usage.monthlyCountDate === thisMonth ? usage.monthlyCount : 0;
 
     // Safety-net áp dụng cho MỌI shop, kể cả đã trả phí "unlimited".
     if (dailyCountSoFar >= DAILY_SAFETY_LIMIT) {
@@ -555,6 +562,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     if (!hasActivePayment && usage.generateCount >= FREE_GENERATE_LIMIT) {
       return { paywall: true, limit: FREE_GENERATE_LIMIT };
+    }
+
+    // Trần kinh doanh riêng cho shop ĐÃ trả phí — khác safety-net theo ngày ở
+    // trên, đây là giới hạn theo gói để bảo vệ biên lợi nhuận subscription.
+    if (hasActivePayment && monthlyCountSoFar >= MONTHLY_PAID_LIMIT) {
+      return { monthlyLimitReached: true, monthlyLimit: MONTHLY_PAID_LIMIT };
     }
 
     const productId = formData.get("productId") as string;
@@ -690,13 +703,15 @@ DESCRIPTION_VN: [bản dịch — giữ đúng định dạng gốc]`
     }
 
     // dailyCount tính cho MỌI shop (safety-net); generateCount (hạn mức free
-    // vĩnh viễn) chỉ tính khi shop CHƯA có subscription active.
+    // vĩnh viễn) chỉ tính khi shop CHƯA có subscription active; monthlyCount
+    // (trần kinh doanh $19,99/tháng) chỉ tính khi shop ĐÃ có subscription.
     await prisma.shopUsage.update({
       where: { shop: session.shop },
       data: {
         dailyCount: dailyCountSoFar + 1,
         dailyCountDate: today,
         ...(!hasActivePayment ? { generateCount: { increment: 1 } } : {}),
+        ...(hasActivePayment ? { monthlyCount: monthlyCountSoFar + 1, monthlyCountDate: thisMonth } : {}),
       },
     });
 
@@ -1289,6 +1304,15 @@ export default function Analyze() {
               <p>
                 You&apos;ve reached the {fetcher.data.dailyLimit} generations/day limit for this store. This resets
                 tomorrow. If you need a higher limit, please contact support.
+              </p>
+            </s-banner>
+          )}
+
+          {fetcher.data?.monthlyLimitReached && (
+            <s-banner tone="warning" heading="Monthly limit reached">
+              <p>
+                You&apos;ve used all {fetcher.data.monthlyLimit} generations included in your plan this month. This
+                resets next month. If you need a higher limit, please contact support.
               </p>
             </s-banner>
           )}

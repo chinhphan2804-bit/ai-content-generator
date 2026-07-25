@@ -47,5 +47,11 @@ model ShopUsage {
   // với merchant dùng bình thường. dailyCountDate là "YYYY-MM-DD" (UTC).
   dailyCount     Int      @default(0)
   dailyCountDate String?
+  // Trần lượt/tháng cho shop ĐÃ trả phí — gói Monthly Subscription chỉ
+  // $19,99, nếu không giới hạn thì 1 shop dùng nhiều (vd sát trần safety-net
+  // 100/ngày ~ 3000/tháng) có thể khiến chi phí AI vượt doanh thu gói. monthlyCountDate
+  // là "YYYY-MM" (UTC), tách biệt hoàn toàn với dailyCount/generateCount.
+  monthlyCount     Int      @default(0)
+  monthlyCountDate String?
   updatedAt     DateTime @updatedAt
 }
