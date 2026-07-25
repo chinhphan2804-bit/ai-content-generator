@@ -3,7 +3,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { authenticate, MONTHLY_PLAN } from "../shopify.server";
 import prisma from "../db.server";
-import { decodeHtmlEntities, extractJsonLdDescription, escapeHtml, applyAiContentText, extractMainContent } from "../utils/content-parsing";
+import { decodeHtmlEntities, extractJsonLdDescription, escapeHtml, applyAiContentText, extractMainContent, truncateWithEllipsis } from "../utils/content-parsing";
 
 async function getAdmin(request: Request) {
   return authenticate.admin(request);
@@ -33,6 +33,40 @@ function renderBold(text: string) {
     }
     return part;
   });
+}
+
+// bodyText giữ nguyên dòng bullet dạng "- " (từ extractDescriptionWithAI) để
+// không mất định dạng gốc — hàm này chỉ lo phần HIỂN THỊ: gom các dòng "- "
+// liên tiếp thành 1 <ul> bullet chấm tròn, còn lại render như đoạn văn thường.
+function renderBodyText(text: string) {
+  const lines = text.split("\n");
+  const elements: React.ReactNode[] = [];
+  let currentList: string[] = [];
+
+  const flushList = () => {
+    if (currentList.length === 0) return;
+    elements.push(
+      <ul key={`ul-${elements.length}`} style={{ margin: "0 0 8px", paddingLeft: "20px" }}>
+        {currentList.map((item, i) => <li key={i} style={{ marginBottom: "4px" }}>{renderBold(item)}</li>)}
+      </ul>
+    );
+    currentList = [];
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const bulletMatch = trimmed.match(/^-\s+(.*)/);
+    if (bulletMatch) {
+      currentList.push(bulletMatch[1]);
+      continue;
+    }
+    flushList();
+    if (trimmed) {
+      elements.push(<p key={`p-${elements.length}`} style={{ margin: "0 0 8px" }}>{renderBold(trimmed)}</p>);
+    }
+  }
+  flushList();
+  return elements;
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -74,31 +108,120 @@ type PageContent = { title: string; metaDesc: string; bodyText: string; raw: str
 
 // Mỗi nền tảng ecommerce dùng 1 dạng URL riêng cho trang chi tiết 1 sản phẩm
 // cụ thể — Shopify: /products/<handle>, Amazon: /dp/<ASIN>, WooCommerce/nhiều
-// site khác: /product/<slug> — dùng để tìm link sản phẩm ĐẦU TIÊN trong 1
-// trang collection/listing, giống hành vi thật của người dùng khi họ vào
-// trang danh sách rồi bấm vào 1 sản phẩm để xem mô tả (case thật 1: Shopify
-// /collections/mens-snowboards liệt kê nhiều board, không có mô tả riêng —
-// case thật 2: Amazon /gift-cards liệt kê hàng chục loại gift card, mỗi cái
-// có link /dp/<ASIN> riêng, ban đầu chỉ tìm /products/ nên bỏ sót).
-const PRODUCT_LINK_PATTERNS = [
-  /href="([^"#?]*\/products\/[^"#?]+)/gi, // Shopify
-  /href="([^"#?]*\/dp\/[A-Z0-9]{8,12}[^"#?]*)/gi, // Amazon
-  /href="([^"#?]*\/gp\/product\/[A-Z0-9]{8,12}[^"#?]*)/gi, // Amazon (dạng cũ)
-  /href="([^"#?]*\/product\/[^"#?]+)/gi, // WooCommerce và nhiều site khác
+// site khác: /product/<slug> — dùng để tìm link sản phẩm trong 1 trang
+// collection/listing, giống hành vi thật của người dùng khi họ vào trang danh
+// sách rồi bấm vào 1 sản phẩm để xem mô tả (case thật: Shopify
+// /collections/mens-snowboards liệt kê nhiều board, không có mô tả riêng).
+const PRODUCT_HREF_PATTERNS = [
+  /\/products\/[^"#?]+/, // Shopify
+  /\/dp\/[A-Z0-9]{8,12}[^"#?]*/, // Amazon
+  /\/gp\/product\/[A-Z0-9]{8,12}[^"#?]*/, // Amazon (dạng cũ)
+  /\/product\/[^"#?]+/, // WooCommerce và nhiều site khác
 ];
 
-function extractFirstProductLink(html: string, pageUrl: string): string | null {
-  for (const pattern of PRODUCT_LINK_PATTERNS) {
-    for (const m of html.matchAll(pattern)) {
-      try {
-        const resolved = new URL(m[1], pageUrl).toString();
-        if (resolved !== pageUrl) return resolved;
-      } catch {
-        // href không parse được thành URL hợp lệ — bỏ qua, thử match tiếp theo
-      }
+function isProductHref(href: string): boolean {
+  return PRODUCT_HREF_PATTERNS.some((p) => p.test(href));
+}
+
+// Nút tài khoản/tiện ích (đổi thẻ, xem số dư, đăng nhập, giỏ hàng...) thường
+// DÙNG CHUNG dạng URL với link sản phẩm thật (case thật: nút "Reload Your
+// Balance" trên Amazon /gift-cards trỏ tới /dp/<ASIN> y hệt link 1 gift card
+// design, và đứng ngay đầu trang — trước mọi sản phẩm thật trong DOM — nên
+// nếu chỉ so khớp URL, đây luôn thắng "link sản phẩm đầu tiên" oan uổng, dẫn
+// tới bấm nhầm vào trang "nạp lại số dư" thay vì 1 gift card thật). Lọc theo
+// aria-label/chữ hiển thị của link để loại các thao tác tài khoản/tiện ích.
+const UTILITY_LINK_TEXT = /\b(redeem|reload|balance|track (your )?order|sign[- ]?in|sign[- ]?up|log[- ]?in|register|view (your )?(cart|bag|account|profile|order)|checkout|wishlist|subscribe|unsubscribe|customer service|contact us|return (an? )?item|refund|apply (a )?coupon|promo code|help center|track package)\b/i;
+
+// So sánh bỏ qua fragment (#...) — 1 link "#userAccount" hay "#reviews" trỏ
+// VỀ CHÍNH trang collection (chỉ cuộn tới 1 section), server trả về y hệt nội
+// dung trang gốc nên không giúp gì (case thật: Kroger /egift-cards có link
+// "#userAccount" đứng ngay đầu trang, nếu so khớp chuỗi y hệt pageUrl sẽ lọt
+// lưới vì có thêm fragment nên không "===" pageUrl).
+function isSamePage(a: string, b: string): boolean {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    return ua.origin === ub.origin && ua.pathname === ub.pathname && ua.search === ub.search;
+  } catch {
+    return a === b;
+  }
+}
+
+// Trả về TỐI ĐA `max` link sản phẩm khác nhau, đúng thứ tự xuất hiện trong
+// DOM — không dừng lại ở link khớp URL đầu tiên (dễ trúng nút tiện ích như
+// trên), để nơi gọi có thể thử lần lượt từng link cho tới khi có 1 cái trích
+// ra được mô tả thật, giống hành vi người dùng thật: bấm vào 1 sản phẩm,
+// không ra gì thì quay lại bấm sản phẩm khác.
+function extractProductLinks(html: string, pageUrl: string, max = 3): string[] {
+  const anchorPattern = /<a\s+([^>]*)>([\s\S]*?)<\/a>/gi;
+  const seen = new Set<string>();
+  const links: string[] = [];
+
+  for (const m of html.matchAll(anchorPattern)) {
+    const attrs = m[1];
+    const href = attrs.match(/href="([^"]*)"/i)?.[1];
+    if (!href || !isProductHref(href)) continue;
+
+    const ariaLabel = attrs.match(/aria-label="([^"]*)"/i)?.[1] || "";
+    const innerText = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (UTILITY_LINK_TEXT.test(ariaLabel) || UTILITY_LINK_TEXT.test(innerText)) continue;
+
+    try {
+      const resolved = new URL(href, pageUrl).toString();
+      if (isSamePage(resolved, pageUrl) || seen.has(resolved)) continue;
+      seen.add(resolved);
+      links.push(resolved);
+      if (links.length >= max) break;
+    } catch {
+      // href không parse được thành URL hợp lệ — bỏ qua, thử tiếp
     }
   }
-  return null;
+
+  return links;
+}
+
+// Fallback khi platform không khớp bất kỳ pattern nào trong
+// PRODUCT_HREF_PATTERNS (case thật: Kroger dùng URL phẳng kiểu
+// giftcards.kroger.com/apple-gift-card — không /products/, /dp/, /product/
+// gì cả, nên extractProductLinks luôn trả về rỗng và code không "bấm vào"
+// được sản phẩm nào, lấy nhầm mô tả DANH MỤC làm Product Description). Mọi
+// thẻ sản phẩm trong 1 lưới danh mục đều có ảnh sản phẩm đi kèm 1 link tên
+// riêng — dùng cấu trúc "ảnh + link" lặp lại này để nhận diện link sản phẩm
+// mà không cần biết trước URL scheme của từng nền tảng.
+function extractCardGridLinks(html: string, pageUrl: string, max = 3): string[] {
+  const cardPattern = /<img\b[^>]*>[\s\S]{0,600}?<a\s+([^>]*)>([\s\S]*?)<\/a>/gi;
+  const origin = (() => {
+    try {
+      return new URL(pageUrl).origin;
+    } catch {
+      return "";
+    }
+  })();
+  const seen = new Set<string>();
+  const links: string[] = [];
+
+  for (const m of html.matchAll(cardPattern)) {
+    const attrs = m[1];
+    const href = attrs.match(/href="([^"]*)"/i)?.[1];
+    if (!href) continue;
+
+    const ariaLabel = attrs.match(/aria-label="([^"]*)"/i)?.[1] || "";
+    const innerText = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (UTILITY_LINK_TEXT.test(ariaLabel) || UTILITY_LINK_TEXT.test(innerText)) continue;
+
+    try {
+      const resolved = new URL(href, pageUrl).toString();
+      if (new URL(resolved).origin !== origin) continue; // bỏ link ngoài trang (mạng xã hội, ads...)
+      if (isSamePage(resolved, pageUrl) || seen.has(resolved)) continue;
+      seen.add(resolved);
+      links.push(resolved);
+      if (links.length >= max) break;
+    } catch {
+      // href/origin không parse được — bỏ qua, thử tiếp
+    }
+  }
+
+  return links;
 }
 
 // Heuristic chấm điểm theo khối (extractMainContent) thiên vị đoạn văn dài
@@ -107,13 +230,29 @@ function extractFirstProductLink(html: string, pageUrl: string): string | null {
 // bullet chỉ 1 câu ngắn, bị đánh giá thấp dù đây mới là mô tả sản phẩm thật
 // sự). Nhờ AI đọc toàn bộ trang và tự trích ra đúng phần mô tả — hiểu được cả
 // dạng đoạn văn lẫn dạng bullet list, không bị bó buộc theo 1 khuôn heuristic.
+//
+// flatText truyền vào đây bị cắt ở `flatText.slice(0, N)` TRƯỚC KHI AI kịp
+// đọc — nếu N quá nhỏ, nội dung đứng trước đoạn mô tả thật trong DOM
+// (breadcrumb, bảng size, thông số kỹ thuật, badge tin cậy...) ăn hết ngân
+// sách, khiến AI chỉ nhận được nửa đầu mô tả và cắt cụt giữa câu (case thật:
+// mô tả bundle "System MTN + APX" dài 1956 ký tự nhưng bị cụt ở ký tự 1727 vì
+// ~4300 ký tự nội dung khác đứng trước nó trong trang, vượt ngưỡng cũ 6000 —
+// đây là dạng bug y hệt "chữ rác đứng trước mô tả thật" từng gặp ở
+// christysports.com, chỉ khác chỗ xảy ra: ở input gửi AI, không phải ở
+// extractMainContent). Nâng ngưỡng lên 20000 ký tự — dư sức chứa cả phần
+// chrome lẫn mô tả thật trên hầu hết trang sản phẩm, chi phí Haiku vẫn không
+// đáng kể.
 async function extractDescriptionWithAI(flatText: string): Promise<string> {
   if (!flatText || flatText.trim().length < 30) return "";
   try {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 500,
+      // Tăng từ 500 lên 800 để phòng mô tả gốc dài hơn cả ngân sách output cũ
+      // (case thật: bundle nhiều sản phẩm gộp chung 1 mô tả — board + bindings
+      // + boots) — nếu vẫn không đủ, có check stop_reason bên dưới để tự
+      // thêm "...".
+      max_tokens: 800,
       messages: [{
         role: "user",
         content: `The text below was scraped from a product page. Find and return ONLY the genuine product description written by the seller — this could be a prose paragraph, or a bulleted feature list (e.g. under a heading like "About this item" / "Features" / "Details"). Do NOT return customer reviews/testimonials, navigation/filter menus, prices, error messages, cookie notices, or unrelated page chrome.
@@ -124,7 +263,7 @@ If the text does not contain a genuine product description, respond with exactly
 
 Scraped text:
 """
-${flatText.slice(0, 6000)}
+${flatText.slice(0, 20000)}
 """
 
 Return ONLY the extracted description (or NONE) — no extra commentary.`,
@@ -132,7 +271,16 @@ Return ONLY the extracted description (or NONE) — no extra commentary.`,
     });
     const answer = response.content[0].type === "text" ? response.content[0].text.trim() : "";
     if (!answer || answer.toUpperCase() === "NONE") return "";
-    return answer.slice(0, 2500);
+
+    let result = truncateWithEllipsis(answer, 2500);
+    // Belt-and-suspenders: dù đã tăng max_tokens, mô tả gốc vẫn có thể dài
+    // hơn cả 800 token (ví dụ bundle nhiều sản phẩm) — nếu Claude báo dừng vì
+    // hết ngân sách (stop_reason "max_tokens") mà chuỗi kết quả CHƯA chạm mốc
+    // 2500 ký tự để tự thêm "...", đánh dấu thủ công ở đây.
+    if (response.stop_reason === "max_tokens" && !result.endsWith("...")) {
+      result = result.trimEnd() + "...";
+    }
+    return result;
   } catch {
     // Lỗi gọi Claude (mạng, quota...) — trả rỗng để logic gọi hàm này tự
     // fallback về heuristic cũ (extractMainContent), không chặn luồng chính.
@@ -140,7 +288,15 @@ Return ONLY the extracted description (or NONE) — no extra commentary.`,
   }
 }
 
-async function fetchPageContent(url: string, depth = 0): Promise<PageContent> {
+// `fast`: chế độ dùng cho user chưa trả phí (dùng thử) — bỏ hết các bước gọi
+// AI phụ (extract mô tả bằng AI, kiểm tra chủ đề, kiểm tra cuối), chỉ dùng
+// heuristic regex (extractMainContent) và chỉ thử 1 link khi cần "bấm vào"
+// sản phẩm — đổi lấy tốc độ/chi phí thấp hơn, chấp nhận độ chính xác thấp hơn
+// (case điển hình: trang bullet-list như Amazon "About this item" có thể bị
+// heuristic đánh giá kém hơn AI, hoặc trang collection không tìm ra sản phẩm
+// nếu link đầu tiên thử được lại là link tiện ích). User đã trả phí luôn
+// chạy full pipeline (fast=false) để có kết quả chính xác nhất.
+async function fetchPageContent(url: string, depth = 0, fast = false): Promise<PageContent> {
   const empty: PageContent = { title: "", metaDesc: "", bodyText: "", raw: "" };
   try {
     const res = await fetch(url, {
@@ -178,9 +334,11 @@ async function fetchPageContent(url: string, depth = 0): Promise<PageContent> {
     // phẩm — thử "bấm vào" sản phẩm đầu tiên tìm được, chỉ 1 cấp (depth === 0)
     // để tránh đệ quy vô hạn nếu link đó lại dẫn tới 1 trang listing khác.
     if (!jsonLd.found && depth === 0) {
-      const productLink = extractFirstProductLink(html, url);
-      if (productLink) {
-        const drilled = await fetchPageContent(productLink, depth + 1);
+      const drillMax = fast ? 1 : 3;
+      const knownPatternLinks = extractProductLinks(html, url, drillMax);
+      const productLinks = knownPatternLinks.length > 0 ? knownPatternLinks : extractCardGridLinks(html, url, drillMax);
+      for (const productLink of productLinks) {
+        const drilled = await fetchPageContent(productLink, depth + 1, fast);
         if (drilled.title || drilled.bodyText || drilled.noDescription) {
           return { ...drilled, resolvedUrl: productLink };
         }
@@ -195,7 +353,7 @@ async function fetchPageContent(url: string, depth = 0): Promise<PageContent> {
 
     let bodyText: string;
     if (jsonLd.found && jsonLd.description) {
-      bodyText = jsonLd.description.slice(0, 2500);
+      bodyText = truncateWithEllipsis(jsonLd.description, 2500);
     } else {
       const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] || html;
       const cleanedHtml = bodyMatch
@@ -210,7 +368,7 @@ async function fetchPageContent(url: string, depth = 0): Promise<PageContent> {
       // Amazon) — ưu tiên nhờ AI đọc toàn trang trích ra đúng phần mô tả, chỉ
       // fallback về heuristic cũ (extractMainContent) nếu AI lỗi/không trích được gì.
       const flatText = decodeHtmlEntities(cleanedHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
-      const aiExtracted = await extractDescriptionWithAI(flatText);
+      const aiExtracted = fast ? "" : await extractDescriptionWithAI(flatText);
       bodyText = aiExtracted || extractMainContent(cleanedHtml);
     }
 
@@ -315,17 +473,23 @@ Answer with exactly one word: YES or NO.`,
 // everypossiblediscount.com) cũng bị loại. Phần còn lại chấm điểm ưu tiên
 // "có mô tả thật" hơn "mô tả rỗng" (case thật: bulmers-nick-knacks.myshopify.com
 // tải OK nhưng để trống mô tả). Dừng sớm ngay khi gặp điểm tuyệt đối.
-async function findCompetitorContent(productName: string): Promise<CompetitorContent | null> {
-  const candidates = (await searchCompetitors(productName)).slice(0, MAX_COMPETITOR_CANDIDATES);
+//
+// `fast`: chế độ user chưa trả phí — chỉ xét đúng 1 candidate (không loop),
+// bỏ qua isRelevantCandidate/isRealProductDescription (2 lệnh AI phụ), và ép
+// fetchPageContent chạy heuristic-only. Đổi lấy tốc độ + chi phí AI thấp hơn
+// hẳn (xem feedback_pricing trong hội thoại) — user trả phí luôn nhận
+// fast=false để có kết quả chính xác nhất.
+async function findCompetitorContent(productName: string, fast = false): Promise<CompetitorContent | null> {
+  const candidates = (await searchCompetitors(productName)).slice(0, fast ? 1 : MAX_COMPETITOR_CANDIDATES);
   if (candidates.length === 0) return null;
 
   let best: { candidate: SearchResult; fetched: PageContent; score: number } | null = null;
 
   for (const candidate of candidates) {
-    const relevant = await isRelevantCandidate(productName, candidate);
+    const relevant = fast ? true : await isRelevantCandidate(productName, candidate);
     if (!relevant) continue;
 
-    const fetched = await fetchPageContent(candidate.link);
+    const fetched = await fetchPageContent(candidate.link, 0, fast);
     // fetchFailed: trang không tải được thật sự (bị chặn/timeout/lỗi mạng) —
     // khác với noDescription (tải được nhưng store khai báo mô tả rỗng).
     const fetchFailed = !fetched.title && !fetched.metaDesc && !fetched.bodyText && !fetched.noDescription;
@@ -343,7 +507,8 @@ async function findCompetitorContent(productName: string): Promise<CompetitorCon
     // Kiểm tra lần cuối bằng AI: đoạn text này có thật sự là mô tả sản phẩm
     // không, hay là lỗi/thông báo hệ thống lọt qua được hết bộ lọc regex phía
     // trên (case thật: JSON-LD trả description = thông báo "requires JavaScript").
-    if (bodyText && !(await isRealProductDescription(bodyText))) {
+    // Bỏ qua ở chế độ fast — chấp nhận rủi ro thấp để đổi lấy tốc độ.
+    if (!fast && bodyText && !(await isRealProductDescription(bodyText))) {
       bodyText = "";
       noDescription = true;
     }
@@ -447,7 +612,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       competitorFetchBlocked = formData.get("cachedCompetitorFetchBlocked") === "true";
       competitorRaw = `SEO Title: ${competitorTitle}\nMeta Description: ${competitorMetaDesc}\nNội dung trang: ${competitorBodyText}`;
     } else {
-      const competitor = await findCompetitorContent(productName);
+      const competitor = await findCompetitorContent(productName, !hasActivePayment);
       if (!competitor) {
         return { error: "No competitor found on Google. Try a different product name." };
       }
@@ -468,14 +633,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       max_tokens: 1500,
       messages: [{
         role: "user",
-        content: `You are an expert e-commerce copywriter who writes benefit-driven, conversion-focused product content.
+        content: `You are an expert e-commerce copywriter who writes benefit-driven, conversion-focused product content that reads better than any competitor's.
 
 Product: "${productName}"${priceLabel ? `\nPrice: ${priceLabel}` : ""}
 
 Competitor content (ranking #1 on Google - ${competitorUrl}):
 ${competitorRaw}
 
-Write content that is MORE compelling than the competitor. Tone: ${toneDesc}. Focus entirely on CUSTOMER BENEFITS — what the customer gains, feels, or achieves — not just product features. Every sentence must answer "what's in it for the customer?".${priceLabel ? ` The price is ${priceLabel} — justify the value so the customer feels it's worth it.` : ""}
+Before writing, read the competitor content above and beat it on three specific axes — don't just write generically "compelling" copy:
+
+1. SHORTER. Your PRODUCT DESCRIPTION must read noticeably more concise than the competitor's description — no filler, no repeated ideas, no throat-clearing. If the competitor is already short, make yours even tighter.
+2. MORE BENEFITS FOR THE CUSTOMER. First notice which customer benefits the competitor's content already covers. Then surface benefits the competitor left out or buried — savings, time, convenience, emotional payoff, reduced risk, etc. — so a reader sees more real value on this listing than on the competitor's page. Every sentence must answer "what's in it for the customer?", never just restate a feature.
+3. A DISTINCTIVE VOICE. Avoid generic e-commerce phrasing that every competitor uses — "high quality", "great value", "perfect for", "you'll love it". Write with a specific, memorable angle that fits the tone below, so this listing stands out from every other listing a shopper has scrolled past today.
+
+Tone: ${toneDesc}.${priceLabel ? ` The price is ${priceLabel} — justify the value so the customer feels it's worth it.` : ""}
 
 Output plain text only. No markdown symbols (no ##, no ---, no backticks). Use **double asterisks** only to bold key value phrases — maximum 2-3 words per bold, only the most compelling differentiators.
 
@@ -488,10 +659,10 @@ META DESCRIPTION:
 [under 160 characters — lead with the top benefit, end with a call-to-action]
 
 PRODUCT DESCRIPTION:
-[exactly 50 words — benefit-first, punchy, every word earns its place${priceLabel ? `, make ${priceLabel} feel like a steal` : ""}]
+[maximum 50 words, and shorter than the competitor's description above whenever theirs is under 50 words — benefit-first, punchy, every word earns its place${priceLabel ? `, make ${priceLabel} feel like a steal` : ""}]
 
 BULLET POINTS:
-Choose only the 3 highest-impact benefits. Prioritize: (1) quantified results (numbers, percentages, time saved, money saved), (2) direct product benefits the customer feels immediately. Avoid vague claims like "high quality" or "great value".
+Choose only the 3 highest-impact benefits, prioritizing ones the competitor's content does NOT already emphasize. Prioritize: (1) quantified results (numbers, percentages, time saved, money saved), (2) direct product benefits the customer feels immediately. Avoid vague claims like "high quality" or "great value".
 - [max 8 words, quantified or direct benefit]
 - [max 8 words, quantified or direct benefit]
 - [max 8 words, quantified or direct benefit]
@@ -503,19 +674,19 @@ ${langInstruction}`
     const translatePromise = language === "vi" && (competitorTitle || competitorMetaDesc || competitorBodyText)
       ? client.messages.create({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 1000,
+        max_tokens: 1500,
         messages: [{
           role: "user",
-          content: `Dịch nội dung e-commerce sau sang tiếng Việt, giữ nguyên giọng marketing tự nhiên:
+          content: `Dịch nội dung e-commerce sau sang tiếng Việt, giữ nguyên giọng marketing tự nhiên. QUAN TRỌNG — giữ nguyên định dạng gốc của DESCRIPTION: nếu là danh sách bullet (mỗi dòng bắt đầu bằng "-"), bản dịch cũng phải là danh sách bullet, đúng số dòng, mỗi dòng bắt đầu bằng "-"; nếu là đoạn văn xuôi thì giữ nguyên dạng văn xuôi. Không gộp các bullet lại thành 1 đoạn.
 
 TITLE: ${competitorTitle}
 META: ${competitorMetaDesc}
-DESCRIPTION: ${competitorBodyText.slice(0, 600)}
+DESCRIPTION: ${competitorBodyText.slice(0, 2500)}
 
 Trả về đúng định dạng:
 TITLE_VN: [bản dịch]
 META_VN: [bản dịch]
-DESCRIPTION_VN: [bản dịch]`
+DESCRIPTION_VN: [bản dịch — giữ đúng định dạng gốc]`
         }]
       })
       : Promise.resolve(null);
@@ -616,6 +787,8 @@ Rules:
 
   if (intent === "load") {
     const productId = formData.get("productId") as string;
+    const isTest = process.env.NODE_ENV !== "production";
+    const hasActivePayment = await billing.check({ plans: [MONTHLY_PLAN], isTest });
 
     // Fetch Shopify product data
     const shopifyRes = await admin.graphql(
@@ -649,7 +822,7 @@ Rules:
     let competitorNoDescription = false;
     let competitorFetchBlocked = false;
     if (productTitle) {
-      const competitor = await findCompetitorContent(productTitle);
+      const competitor = await findCompetitorContent(productTitle, !hasActivePayment);
       if (competitor) {
         competitorUrl = competitor.url;
         competitorTitle = competitor.title;
@@ -1257,9 +1430,9 @@ export default function Analyze() {
                                 : "This competitor page has no product description — it left this field empty."}
                             </div>
                           ) : (
-                            <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "inherit", lineHeight: 1.6, fontSize: "13px", maxHeight: "400px", overflowY: "auto", padding: "8px", background: "#f5f5f5", borderRadius: "4px" }}>
-                              {(language === "vi" && cachedCompetitor!.bodyTextVi) || cachedCompetitor!.bodyText || "—"}
-                            </pre>
+                            <div style={{ lineHeight: 1.6, fontSize: "13px", maxHeight: "400px", overflowY: "auto", padding: "8px", background: "#f5f5f5", borderRadius: "4px" }}>
+                              {renderBodyText((language === "vi" && cachedCompetitor!.bodyTextVi) || cachedCompetitor!.bodyText || "—")}
+                            </div>
                           )}
                         </div>
                       </div>

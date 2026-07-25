@@ -73,6 +73,15 @@ function scoreProseChunk(text: string): number {
   return score;
 }
 
+// Cắt về đúng maxLength nhưng đánh dấu rõ bằng "..." khi thật sự có cắt —
+// nếu không, nội dung dài bị cụt ngang giữa câu trông như lỗi/tải thiếu chứ
+// không phải cố ý giới hạn độ dài. Chỉ thêm "..." khi text.length > maxLength
+// (không thêm vào nội dung vốn đã ngắn hơn giới hạn).
+export function truncateWithEllipsis(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return text.slice(0, maxLength).trimEnd() + "...";
+}
+
 // Chỉ lấy ĐÚNG 1 đoạn khớp nhất với "mô tả sản phẩm/danh mục" — cố tình
 // KHÔNG gộp nhiều đoạn lại, vì các đoạn nằm rải rác trên trang (tên sản phẩm,
 // review, mô tả brand...) ghép chung dễ ra 1 khối lộn xộn sai ngữ cảnh, còn
@@ -102,7 +111,7 @@ export function extractMainContent(bodyHtml: string, maxLength = 2500): string {
     }
   }
 
-  return best.slice(0, maxLength);
+  return truncateWithEllipsis(best, maxLength);
 }
 
 // Chặn HTML/script lạ lọt vào descriptionHtml khi lưu — nội dung ở đây có thể

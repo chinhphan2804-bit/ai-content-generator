@@ -1,5 +1,27 @@
 import { describe, it, expect, vi } from "vitest";
-import { decodeHtmlEntities, extractJsonLdDescription, escapeHtml, applyAiContentText, extractMainContent } from "./content-parsing";
+import { decodeHtmlEntities, extractJsonLdDescription, escapeHtml, applyAiContentText, extractMainContent, truncateWithEllipsis } from "./content-parsing";
+
+describe("truncateWithEllipsis", () => {
+  it("leaves text under the limit untouched", () => {
+    expect(truncateWithEllipsis("short text", 100)).toBe("short text");
+  });
+
+  it("leaves text exactly at the limit untouched", () => {
+    const text = "a".repeat(50);
+    expect(truncateWithEllipsis(text, 50)).toBe(text);
+  });
+
+  it("truncates and appends ellipsis when over the limit", () => {
+    const result = truncateWithEllipsis("a".repeat(120), 100);
+    expect(result).toBe("a".repeat(100) + "...");
+  });
+
+  it("trims trailing whitespace before appending ellipsis", () => {
+    const result = truncateWithEllipsis("word ".repeat(30), 20);
+    expect(result.endsWith(" ...")).toBe(false);
+    expect(result.endsWith("...")).toBe(true);
+  });
+});
 
 describe("decodeHtmlEntities", () => {
   it("decodes named entities", () => {
@@ -185,10 +207,11 @@ describe("extractMainContent", () => {
     expect(extractMainContent(html)).toBe("");
   });
 
-  it("truncates the chosen paragraph to maxLength", () => {
+  it("truncates the chosen paragraph to maxLength and marks it with an ellipsis", () => {
     const longSentence = "This is a genuinely long descriptive sentence about a great product. ".repeat(50);
     const html = `<p>${longSentence}</p>`;
     const result = extractMainContent(html, 100);
-    expect(result.length).toBeLessThanOrEqual(100);
+    expect(result.length).toBeLessThanOrEqual(103); // maxLength + "..."
+    expect(result.endsWith("...")).toBe(true);
   });
 });
