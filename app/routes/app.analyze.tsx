@@ -17,6 +17,11 @@ const FREE_GENERATE_LIMIT = 5;
 // chỉ để chặn bug/spam gọi lặp vô hạn, dư sức cho merchant dùng bình thường.
 const DAILY_SAFETY_LIMIT = 100;
 
+// Trần lượt Generate/tháng cho shop ĐÃ trả phí — gói Monthly Subscription chỉ
+// $19,99, cần giới hạn kinh doanh riêng (khác safety-net ở trên) để chi phí
+// AI mỗi shop không vượt quá doanh thu gói mang lại.
+const MONTHLY_PAID_LIMIT = 150;
+
 type Product = { id: string; title: string; price: string; currency: string };
 type Message = { role: "user" | "assistant"; content: string };
 
@@ -288,15 +293,7 @@ Return ONLY the extracted description (or NONE) — no extra commentary.`,
   }
 }
 
-// `fast`: chế độ dùng cho user chưa trả phí (dùng thử) — bỏ hết các bước gọi
-// AI phụ (extract mô tả bằng AI, kiểm tra chủ đề, kiểm tra cuối), chỉ dùng
-// heuristic regex (extractMainContent) và chỉ thử 1 link khi cần "bấm vào"
-// sản phẩm — đổi lấy tốc độ/chi phí thấp hơn, chấp nhận độ chính xác thấp hơn
-// (case điển hình: trang bullet-list như Amazon "About this item" có thể bị
-// heuristic đánh giá kém hơn AI, hoặc trang collection không tìm ra sản phẩm
-// nếu link đầu tiên thử được lại là link tiện ích). User đã trả phí luôn
-// chạy full pipeline (fast=false) để có kết quả chính xác nhất.
-async function fetchPageContent(url: string, depth = 0, fast = false): Promise<PageContent> {
+async function fetchPageContent(url: string, depth = 0): Promise<PageContent> {
   const empty: PageContent = { title: "", metaDesc: "", bodyText: "", raw: "" };
   try {
     const res = await fetch(url, {
@@ -334,11 +331,10 @@ async function fetchPageContent(url: string, depth = 0, fast = false): Promise<P
     // phẩm — thử "bấm vào" sản phẩm đầu tiên tìm được, chỉ 1 cấp (depth === 0)
     // để tránh đệ quy vô hạn nếu link đó lại dẫn tới 1 trang listing khác.
     if (!jsonLd.found && depth === 0) {
-      const drillMax = fast ? 1 : 3;
-      const knownPatternLinks = extractProductLinks(html, url, drillMax);
-      const productLinks = knownPatternLinks.length > 0 ? knownPatternLinks : extractCardGridLinks(html, url, drillMax);
+      const knownPatternLinks = extractProductLinks(html, url);
+      const productLinks = knownPatternLinks.length > 0 ? knownPatternLinks : extractCardGridLinks(html, url);
       for (const productLink of productLinks) {
-        const drilled = await fetchPageContent(productLink, depth + 1, fast);
+        const drilled = await fetchPageContent(productLink, depth + 1);
         if (drilled.title || drilled.bodyText || drilled.noDescription) {
           return { ...drilled, resolvedUrl: productLink };
         }
@@ -368,7 +364,7 @@ async function fetchPageContent(url: string, depth = 0, fast = false): Promise<P
       // Amazon) — ưu tiên nhờ AI đọc toàn trang trích ra đúng phần mô tả, chỉ
       // fallback về heuristic cũ (extractMainContent) nếu AI lỗi/không trích được gì.
       const flatText = decodeHtmlEntities(cleanedHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
-      const aiExtracted = fast ? "" : await extractDescriptionWithAI(flatText);
+      const aiExtracted = await extractDescriptionWithAI(flatText);
       bodyText = aiExtracted || extractMainContent(cleanedHtml);
     }
 
@@ -473,23 +469,17 @@ Answer with exactly one word: YES or NO.`,
 // everypossiblediscount.com) cũng bị loại. Phần còn lại chấm điểm ưu tiên
 // "có mô tả thật" hơn "mô tả rỗng" (case thật: bulmers-nick-knacks.myshopify.com
 // tải OK nhưng để trống mô tả). Dừng sớm ngay khi gặp điểm tuyệt đối.
-//
-// `fast`: chế độ user chưa trả phí — chỉ xét đúng 1 candidate (không loop),
-// bỏ qua isRelevantCandidate/isRealProductDescription (2 lệnh AI phụ), và ép
-// fetchPageContent chạy heuristic-only. Đổi lấy tốc độ + chi phí AI thấp hơn
-// hẳn (xem feedback_pricing trong hội thoại) — user trả phí luôn nhận
-// fast=false để có kết quả chính xác nhất.
-async function findCompetitorContent(productName: string, fast = false): Promise<CompetitorContent | null> {
-  const candidates = (await searchCompetitors(productName)).slice(0, fast ? 1 : MAX_COMPETITOR_CANDIDATES);
+async function findCompetitorContent(productName: string): Promise<CompetitorContent | null> {
+  const candidates = (await searchCompetitors(productName)).slice(0, MAX_COMPETITOR_CANDIDATES);
   if (candidates.length === 0) return null;
 
   let best: { candidate: SearchResult; fetched: PageContent; score: number } | null = null;
 
   for (const candidate of candidates) {
-    const relevant = fast ? true : await isRelevantCandidate(productName, candidate);
+    const relevant = await isRelevantCandidate(productName, candidate);
     if (!relevant) continue;
 
-    const fetched = await fetchPageContent(candidate.link, 0, fast);
+    const fetched = await fetchPageContent(candidate.link);
     // fetchFailed: trang không tải được thật sự (bị chặn/timeout/lỗi mạng) —
     // khác với noDescription (tải được nhưng store khai báo mô tả rỗng).
     const fetchFailed = !fetched.title && !fetched.metaDesc && !fetched.bodyText && !fetched.noDescription;
@@ -507,8 +497,7 @@ async function findCompetitorContent(productName: string, fast = false): Promise
     // Kiểm tra lần cuối bằng AI: đoạn text này có thật sự là mô tả sản phẩm
     // không, hay là lỗi/thông báo hệ thống lọt qua được hết bộ lọc regex phía
     // trên (case thật: JSON-LD trả description = thông báo "requires JavaScript").
-    // Bỏ qua ở chế độ fast — chấp nhận rủi ro thấp để đổi lấy tốc độ.
-    if (!fast && bodyText && !(await isRealProductDescription(bodyText))) {
+    if (bodyText && !(await isRealProductDescription(bodyText))) {
       bodyText = "";
       noDescription = true;
     }
@@ -563,6 +552,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       create: { shop: session.shop },
     });
     const dailyCountSoFar = usage.dailyCountDate === today ? usage.dailyCount : 0;
+    const thisMonth = today.slice(0, 7); // UTC YYYY-MM
+    const monthlyCountSoFar = usage.monthlyCountDate === thisMonth ? usage.monthlyCount : 0;
 
     // Safety-net áp dụng cho MỌI shop, kể cả đã trả phí "unlimited".
     if (dailyCountSoFar >= DAILY_SAFETY_LIMIT) {
@@ -571,6 +562,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     if (!hasActivePayment && usage.generateCount >= FREE_GENERATE_LIMIT) {
       return { paywall: true, limit: FREE_GENERATE_LIMIT };
+    }
+
+    // Trần kinh doanh riêng cho shop ĐÃ trả phí — khác safety-net theo ngày ở
+    // trên, đây là giới hạn theo gói để bảo vệ biên lợi nhuận subscription.
+    if (hasActivePayment && monthlyCountSoFar >= MONTHLY_PAID_LIMIT) {
+      return { monthlyLimitReached: true, monthlyLimit: MONTHLY_PAID_LIMIT };
     }
 
     const productId = formData.get("productId") as string;
@@ -612,7 +609,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       competitorFetchBlocked = formData.get("cachedCompetitorFetchBlocked") === "true";
       competitorRaw = `SEO Title: ${competitorTitle}\nMeta Description: ${competitorMetaDesc}\nNội dung trang: ${competitorBodyText}`;
     } else {
-      const competitor = await findCompetitorContent(productName, !hasActivePayment);
+      const competitor = await findCompetitorContent(productName);
       if (!competitor) {
         return { error: "No competitor found on Google. Try a different product name." };
       }
@@ -706,13 +703,15 @@ DESCRIPTION_VN: [bản dịch — giữ đúng định dạng gốc]`
     }
 
     // dailyCount tính cho MỌI shop (safety-net); generateCount (hạn mức free
-    // vĩnh viễn) chỉ tính khi shop CHƯA có subscription active.
+    // vĩnh viễn) chỉ tính khi shop CHƯA có subscription active; monthlyCount
+    // (trần kinh doanh $19,99/tháng) chỉ tính khi shop ĐÃ có subscription.
     await prisma.shopUsage.update({
       where: { shop: session.shop },
       data: {
         dailyCount: dailyCountSoFar + 1,
         dailyCountDate: today,
         ...(!hasActivePayment ? { generateCount: { increment: 1 } } : {}),
+        ...(hasActivePayment ? { monthlyCount: monthlyCountSoFar + 1, monthlyCountDate: thisMonth } : {}),
       },
     });
 
@@ -787,8 +786,6 @@ Rules:
 
   if (intent === "load") {
     const productId = formData.get("productId") as string;
-    const isTest = process.env.NODE_ENV !== "production";
-    const hasActivePayment = await billing.check({ plans: [MONTHLY_PLAN], isTest });
 
     // Fetch Shopify product data
     const shopifyRes = await admin.graphql(
@@ -822,7 +819,7 @@ Rules:
     let competitorNoDescription = false;
     let competitorFetchBlocked = false;
     if (productTitle) {
-      const competitor = await findCompetitorContent(productTitle, !hasActivePayment);
+      const competitor = await findCompetitorContent(productTitle);
       if (competitor) {
         competitorUrl = competitor.url;
         competitorTitle = competitor.title;
@@ -1307,6 +1304,15 @@ export default function Analyze() {
               <p>
                 You&apos;ve reached the {fetcher.data.dailyLimit} generations/day limit for this store. This resets
                 tomorrow. If you need a higher limit, please contact support.
+              </p>
+            </s-banner>
+          )}
+
+          {fetcher.data?.monthlyLimitReached && (
+            <s-banner tone="warning" heading="Monthly limit reached">
+              <p>
+                You&apos;ve used all {fetcher.data.monthlyLimit} generations included in your plan this month. This
+                resets next month. If you need a higher limit, please contact support.
               </p>
             </s-banner>
           )}
