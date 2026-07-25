@@ -15,10 +15,10 @@ export default function App() {
 
   return (
     <AppProvider embedded apiKey={apiKey}>
-      <ui-nav-menu>
+      <s-app-nav>
         <a href="/app/analyze" rel="home">AI Content Generator</a>
         <a href="/app/subscribe">Subscription</a>
-      </ui-nav-menu>
+      </s-app-nav>
       <Outlet />
     </AppProvider>
   );

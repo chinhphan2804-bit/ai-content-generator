@@ -1,5 +1,27 @@
 import { describe, it, expect, vi } from "vitest";
-import { decodeHtmlEntities, extractJsonLdDescription, escapeHtml, applyAiContentText } from "./content-parsing";
+import { decodeHtmlEntities, extractJsonLdDescription, escapeHtml, applyAiContentText, extractMainContent, truncateWithEllipsis } from "./content-parsing";
+
+describe("truncateWithEllipsis", () => {
+  it("leaves text under the limit untouched", () => {
+    expect(truncateWithEllipsis("short text", 100)).toBe("short text");
+  });
+
+  it("leaves text exactly at the limit untouched", () => {
+    const text = "a".repeat(50);
+    expect(truncateWithEllipsis(text, 50)).toBe(text);
+  });
+
+  it("truncates and appends ellipsis when over the limit", () => {
+    const result = truncateWithEllipsis("a".repeat(120), 100);
+    expect(result).toBe("a".repeat(100) + "...");
+  });
+
+  it("trims trailing whitespace before appending ellipsis", () => {
+    const result = truncateWithEllipsis("word ".repeat(30), 20);
+    expect(result.endsWith(" ...")).toBe(false);
+    expect(result.endsWith("...")).toBe(true);
+  });
+});
 
 describe("decodeHtmlEntities", () => {
   it("decodes named entities", () => {
@@ -128,5 +150,68 @@ describe("applyAiContentText", () => {
     applyAiContentText(raw, setTitle, setMeta, setDesc, setBullets);
 
     expect(setBullets).toHaveBeenCalledWith(["Only one bullet", "", ""]);
+  });
+});
+
+describe("extractMainContent", () => {
+  it("picks exactly the single strongest paragraph instead of merging several (christysports.com bug case)", () => {
+    const html = `
+      <div class="filters">
+        <div>Products (324) 324 Results Sort By: Sort By (trending) Highest $ Lowest $ A - Z Z - A New Arrivals</div>
+        <ul>
+          <li>Refine by Category: Snowboard selected</li>
+          <li>Currently Refined by Category: Snowboards</li>
+          <li>Refine by Brand: Arbor Refine by Brand: Bent Metal Refine by Brand: CAPiTA</li>
+        </ul>
+      </div>
+      <div class="product-names">K2 Maysis Snowboard Boots Mens Ride Insano Snowboard Boots Mens Union Reset Pro Snowboard Boots Salomon Sleepwalker Grom Snowboard Kids Lib Tech T Rice Orca Snowboard</div>
+      <div class="seo-content">
+        <h1>Score Big on Clearance Snowboard Gear</h1>
+        <p>Looking for incredible deals on snowboard gear without sacrificing quality? You've hit the jackpot. Our clearance snowboard collection is packed with top-of-the-line boards, boots, and bindings from the brands you trust, all at prices that'll make you want to do a victory lap.</p>
+        <p>Check out our full selection of snowboards and gear for every kind of rider today.</p>
+      </div>
+    `;
+
+    const result = extractMainContent(html);
+
+    expect(result).toContain("hit the jackpot");
+    // Chỉ trả về 1 đoạn duy nhất (đoạn điểm cao nhất) — không gộp đoạn yếu hơn vào.
+    expect(result).not.toContain("Check out our full selection");
+    expect(result).not.toContain("Refine by");
+    // Chuỗi tên sản phẩm nối tiếp, không có câu hoàn chỉnh -> không bao giờ được chọn.
+    expect(result).not.toContain("K2 Maysis Snowboard Boots");
+  });
+
+  it("never selects a run of product names with no sentence punctuation as the description", () => {
+    const html = `<div>K2 Maysis Snowboard Boots Mens Ride Insano Snowboard Boots Mens Union Reset Pro Snowboard Boots Salomon Sleepwalker Grom Snowboard Kids Lib Tech T Rice Orca Snowboard</div>`;
+    expect(extractMainContent(html)).toBe("");
+  });
+
+  it("never selects an empty-category 'no products found' message as the description (the-board-hoard.co.uk bug case)", () => {
+    const html = `<div>Skip to content No products were found matching your selection.</div>`;
+    expect(extractMainContent(html)).toBe("");
+  });
+
+  it("never selects a cookie-consent banner as the description (arborcollective.com bug case)", () => {
+    const html = `<div>This website uses cookies to make the experience of this website better. By continuing past this notice and by using this website you agree to our use of cookies.</div>`;
+    expect(extractMainContent(html)).toBe("");
+  });
+
+  it("never selects a JavaScript-required stub page as the description (mountsnow.com bug case)", () => {
+    const html = `<div>The site requires JavaScript to be enabled! The browser you're using doesn't support JavaScript, or has JavaScript turned off. Try again with a browser that supports JavaScript.</div>`;
+    expect(extractMainContent(html)).toBe("");
+  });
+
+  it("returns empty string when no block passes the prose threshold", () => {
+    const html = `<div><li>Sort By</li><li>Filter</li><li>In Stock</li></div>`;
+    expect(extractMainContent(html)).toBe("");
+  });
+
+  it("truncates the chosen paragraph to maxLength and marks it with an ellipsis", () => {
+    const longSentence = "This is a genuinely long descriptive sentence about a great product. ".repeat(50);
+    const html = `<p>${longSentence}</p>`;
+    const result = extractMainContent(html, 100);
+    expect(result.length).toBeLessThanOrEqual(103); // maxLength + "..."
+    expect(result.endsWith("...")).toBe(true);
   });
 });

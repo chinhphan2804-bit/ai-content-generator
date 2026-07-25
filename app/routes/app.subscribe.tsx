@@ -56,7 +56,9 @@ export default function Subscribe() {
 
   return (
     <s-page>
-      <ui-title-bar title="Upgrade to Pro"></ui-title-bar>
+      <ui-title-bar title="Upgrade to Pro">
+        <a variant="breadcrumb" href="/app/analyze">Back</a>
+      </ui-title-bar>
       <s-layout>
         <s-layout-section>
           <s-card>
