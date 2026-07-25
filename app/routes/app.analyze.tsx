@@ -288,15 +288,7 @@ Return ONLY the extracted description (or NONE) — no extra commentary.`,
   }
 }
 
-// `fast`: chế độ dùng cho user chưa trả phí (dùng thử) — bỏ hết các bước gọi
-// AI phụ (extract mô tả bằng AI, kiểm tra chủ đề, kiểm tra cuối), chỉ dùng
-// heuristic regex (extractMainContent) và chỉ thử 1 link khi cần "bấm vào"
-// sản phẩm — đổi lấy tốc độ/chi phí thấp hơn, chấp nhận độ chính xác thấp hơn
-// (case điển hình: trang bullet-list như Amazon "About this item" có thể bị
-// heuristic đánh giá kém hơn AI, hoặc trang collection không tìm ra sản phẩm
-// nếu link đầu tiên thử được lại là link tiện ích). User đã trả phí luôn
-// chạy full pipeline (fast=false) để có kết quả chính xác nhất.
-async function fetchPageContent(url: string, depth = 0, fast = false): Promise<PageContent> {
+async function fetchPageContent(url: string, depth = 0): Promise<PageContent> {
   const empty: PageContent = { title: "", metaDesc: "", bodyText: "", raw: "" };
   try {
     const res = await fetch(url, {
@@ -334,11 +326,10 @@ async function fetchPageContent(url: string, depth = 0, fast = false): Promise<P
     // phẩm — thử "bấm vào" sản phẩm đầu tiên tìm được, chỉ 1 cấp (depth === 0)
     // để tránh đệ quy vô hạn nếu link đó lại dẫn tới 1 trang listing khác.
     if (!jsonLd.found && depth === 0) {
-      const drillMax = fast ? 1 : 3;
-      const knownPatternLinks = extractProductLinks(html, url, drillMax);
-      const productLinks = knownPatternLinks.length > 0 ? knownPatternLinks : extractCardGridLinks(html, url, drillMax);
+      const knownPatternLinks = extractProductLinks(html, url);
+      const productLinks = knownPatternLinks.length > 0 ? knownPatternLinks : extractCardGridLinks(html, url);
       for (const productLink of productLinks) {
-        const drilled = await fetchPageContent(productLink, depth + 1, fast);
+        const drilled = await fetchPageContent(productLink, depth + 1);
         if (drilled.title || drilled.bodyText || drilled.noDescription) {
           return { ...drilled, resolvedUrl: productLink };
         }
@@ -368,7 +359,7 @@ async function fetchPageContent(url: string, depth = 0, fast = false): Promise<P
       // Amazon) — ưu tiên nhờ AI đọc toàn trang trích ra đúng phần mô tả, chỉ
       // fallback về heuristic cũ (extractMainContent) nếu AI lỗi/không trích được gì.
       const flatText = decodeHtmlEntities(cleanedHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
-      const aiExtracted = fast ? "" : await extractDescriptionWithAI(flatText);
+      const aiExtracted = await extractDescriptionWithAI(flatText);
       bodyText = aiExtracted || extractMainContent(cleanedHtml);
     }
 
@@ -473,23 +464,17 @@ Answer with exactly one word: YES or NO.`,
 // everypossiblediscount.com) cũng bị loại. Phần còn lại chấm điểm ưu tiên
 // "có mô tả thật" hơn "mô tả rỗng" (case thật: bulmers-nick-knacks.myshopify.com
 // tải OK nhưng để trống mô tả). Dừng sớm ngay khi gặp điểm tuyệt đối.
-//
-// `fast`: chế độ user chưa trả phí — chỉ xét đúng 1 candidate (không loop),
-// bỏ qua isRelevantCandidate/isRealProductDescription (2 lệnh AI phụ), và ép
-// fetchPageContent chạy heuristic-only. Đổi lấy tốc độ + chi phí AI thấp hơn
-// hẳn (xem feedback_pricing trong hội thoại) — user trả phí luôn nhận
-// fast=false để có kết quả chính xác nhất.
-async function findCompetitorContent(productName: string, fast = false): Promise<CompetitorContent | null> {
-  const candidates = (await searchCompetitors(productName)).slice(0, fast ? 1 : MAX_COMPETITOR_CANDIDATES);
+async function findCompetitorContent(productName: string): Promise<CompetitorContent | null> {
+  const candidates = (await searchCompetitors(productName)).slice(0, MAX_COMPETITOR_CANDIDATES);
   if (candidates.length === 0) return null;
 
   let best: { candidate: SearchResult; fetched: PageContent; score: number } | null = null;
 
   for (const candidate of candidates) {
-    const relevant = fast ? true : await isRelevantCandidate(productName, candidate);
+    const relevant = await isRelevantCandidate(productName, candidate);
     if (!relevant) continue;
 
-    const fetched = await fetchPageContent(candidate.link, 0, fast);
+    const fetched = await fetchPageContent(candidate.link);
     // fetchFailed: trang không tải được thật sự (bị chặn/timeout/lỗi mạng) —
     // khác với noDescription (tải được nhưng store khai báo mô tả rỗng).
     const fetchFailed = !fetched.title && !fetched.metaDesc && !fetched.bodyText && !fetched.noDescription;
@@ -507,8 +492,7 @@ async function findCompetitorContent(productName: string, fast = false): Promise
     // Kiểm tra lần cuối bằng AI: đoạn text này có thật sự là mô tả sản phẩm
     // không, hay là lỗi/thông báo hệ thống lọt qua được hết bộ lọc regex phía
     // trên (case thật: JSON-LD trả description = thông báo "requires JavaScript").
-    // Bỏ qua ở chế độ fast — chấp nhận rủi ro thấp để đổi lấy tốc độ.
-    if (!fast && bodyText && !(await isRealProductDescription(bodyText))) {
+    if (bodyText && !(await isRealProductDescription(bodyText))) {
       bodyText = "";
       noDescription = true;
     }
@@ -612,7 +596,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       competitorFetchBlocked = formData.get("cachedCompetitorFetchBlocked") === "true";
       competitorRaw = `SEO Title: ${competitorTitle}\nMeta Description: ${competitorMetaDesc}\nNội dung trang: ${competitorBodyText}`;
     } else {
-      const competitor = await findCompetitorContent(productName, !hasActivePayment);
+      const competitor = await findCompetitorContent(productName);
       if (!competitor) {
         return { error: "No competitor found on Google. Try a different product name." };
       }
@@ -787,8 +771,6 @@ Rules:
 
   if (intent === "load") {
     const productId = formData.get("productId") as string;
-    const isTest = process.env.NODE_ENV !== "production";
-    const hasActivePayment = await billing.check({ plans: [MONTHLY_PLAN], isTest });
 
     // Fetch Shopify product data
     const shopifyRes = await admin.graphql(
@@ -822,7 +804,7 @@ Rules:
     let competitorNoDescription = false;
     let competitorFetchBlocked = false;
     if (productTitle) {
-      const competitor = await findCompetitorContent(productTitle, !hasActivePayment);
+      const competitor = await findCompetitorContent(productTitle);
       if (competitor) {
         competitorUrl = competitor.url;
         competitorTitle = competitor.title;
