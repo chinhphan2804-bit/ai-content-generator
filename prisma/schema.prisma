@@ -42,5 +42,10 @@ model Session {
 model ShopUsage {
   shop          String   @id
   generateCount Int      @default(0)
+  // Safety-net rate limit theo ngày, áp dụng cho MỌI shop kể cả đã trả phí
+  // "unlimited" — chỉ để chặn bug/spam gọi lặp vô hạn, không giới hạn thật
+  // với merchant dùng bình thường. dailyCountDate là "YYYY-MM-DD" (UTC).
+  dailyCount     Int      @default(0)
+  dailyCountDate String?
   updatedAt     DateTime @updatedAt
 }

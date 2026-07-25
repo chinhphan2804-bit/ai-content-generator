@@ -13,6 +13,10 @@ import Anthropic from "@anthropic-ai/sdk";
 // Số lượt "Generate AI Content" miễn phí trước khi cần nâng cấp gói Pro.
 const FREE_GENERATE_LIMIT = 5;
 
+// Safety-net rate limit theo ngày cho MỌI shop kể cả đã trả phí "unlimited" —
+// chỉ để chặn bug/spam gọi lặp vô hạn, dư sức cho merchant dùng bình thường.
+const DAILY_SAFETY_LIMIT = 100;
+
 type Product = { id: string; title: string; price: string; currency: string };
 type Message = { role: "user" | "assistant"; content: string };
 
@@ -144,15 +148,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // FREE_GENERATE_LIMIT lượt — kiểm tra TRƯỚC khi tốn tiền gọi Claude/Google.
     const isTest = process.env.NODE_ENV !== "production";
     const hasActivePayment = await billing.check({ plans: [MONTHLY_PLAN], isTest });
-    if (!hasActivePayment) {
-      const usage = await prisma.shopUsage.upsert({
-        where: { shop: session.shop },
-        update: {},
-        create: { shop: session.shop },
-      });
-      if (usage.generateCount >= FREE_GENERATE_LIMIT) {
-        return { paywall: true, limit: FREE_GENERATE_LIMIT };
-      }
+
+    const today = new Date().toISOString().slice(0, 10); // UTC YYYY-MM-DD
+    const usage = await prisma.shopUsage.upsert({
+      where: { shop: session.shop },
+      update: {},
+      create: { shop: session.shop },
+    });
+    const dailyCountSoFar = usage.dailyCountDate === today ? usage.dailyCount : 0;
+
+    // Safety-net áp dụng cho MỌI shop, kể cả đã trả phí "unlimited".
+    if (dailyCountSoFar >= DAILY_SAFETY_LIMIT) {
+      return { dailyLimitReached: true, dailyLimit: DAILY_SAFETY_LIMIT };
+    }
+
+    if (!hasActivePayment && usage.generateCount >= FREE_GENERATE_LIMIT) {
+      return { paywall: true, limit: FREE_GENERATE_LIMIT };
     }
 
     const productId = formData.get("productId") as string;
@@ -289,13 +300,16 @@ DESCRIPTION_VN: [bản dịch]`
       competitorBodyTextVi = t.match(/DESCRIPTION_VN:\s*([\s\S]*?)$/i)?.[1]?.trim() || "";
     }
 
-    // Chỉ tính vào hạn mức free nếu shop CHƯA có subscription active.
-    if (!hasActivePayment) {
-      await prisma.shopUsage.update({
-        where: { shop: session.shop },
-        data: { generateCount: { increment: 1 } },
-      });
-    }
+    // dailyCount tính cho MỌI shop (safety-net); generateCount (hạn mức free
+    // vĩnh viễn) chỉ tính khi shop CHƯA có subscription active.
+    await prisma.shopUsage.update({
+      where: { shop: session.shop },
+      data: {
+        dailyCount: dailyCountSoFar + 1,
+        dailyCountDate: today,
+        ...(!hasActivePayment ? { generateCount: { increment: 1 } } : {}),
+      },
+    });
 
     return {
       competitorUrl,
@@ -815,6 +829,15 @@ export default function Analyze() {
               <div style={{ marginTop: "8px" }}>
                 <s-button href="/app/subscribe" variant="primary">Upgrade to Pro</s-button>
               </div>
+            </s-banner>
+          )}
+
+          {fetcher.data?.dailyLimitReached && (
+            <s-banner tone="warning" heading="Daily limit reached">
+              <p>
+                You&apos;ve reached the {fetcher.data.dailyLimit} generations/day limit for this store. This resets
+                tomorrow. If you need a higher limit, please contact support.
+              </p>
             </s-banner>
           )}
 
