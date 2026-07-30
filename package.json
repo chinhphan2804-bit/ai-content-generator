@@ -29,7 +29,7 @@
     "@prisma/client": "^6.16.3",
     "@react-router/dev": "^7.12.0",
     "@react-router/fs-routes": "^7.12.0",
-    "@react-router/node": "^7.12.0",
+    "@react-router/node": "^8.1.0",
     "@react-router/serve": "^7.12.0",
     "@sentry/node": "^10.67.0",
     "@shopify/cli": "4.5.2",
